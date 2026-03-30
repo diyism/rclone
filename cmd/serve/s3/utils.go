@@ -16,12 +16,31 @@ import (
 )
 
 func getDirEntries(prefix string, VFS *vfs.VFS) (vfs.Nodes, error) {
+	// First, try to stat the path as-is
 	node, err := VFS.Stat(prefix)
 
 	if err == vfs.ENOENT {
 		return nil, gofakes3.ErrNoSuchKey
 	} else if err != nil {
-		return nil, err
+		// If we get an error that suggests the path is a file not a directory,
+		// this might be because VFS found a .s3 file when we actually want the directory.
+		// This can happen when both "foo.s3" (file) and "foo/" (directory) exist.
+		// In S3, "foo" can be both an object and a prefix, but in filesystems they conflict.
+		// Our solution: files are stored as "foo.s3", directories as "foo/".
+		// When VFS traverses "foo", it might find "foo.s3" first and fail.
+		// Solution: explicitly request the directory by adding trailing slash.
+		errStr := err.Error()
+		if strings.Contains(errStr, "file") || strings.Contains(errStr, "directory") ||
+			strings.Contains(errStr, "not a directory") {
+			// Try to force directory access by ensuring the path ends with /
+			dirPath := strings.TrimSuffix(prefix, "/") + "/"
+			node, err = VFS.Stat(dirPath)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	if !node.IsDir() {
@@ -136,4 +155,24 @@ func authlistResolver(list []string) (map[string]string, error) {
 		authList[parts[0]] = parts[1]
 	}
 	return authList, nil
+}
+
+// toStoragePath converts an S3 object path to a storage path by adding .s3 extension
+// This solves the conflict where S3 allows both "foo/bar" (object) and "foo/bar/baz" (object with prefix)
+// but hierarchical filesystems like Google Drive don't allow a path to be both a file and directory
+func toStoragePath(s3Path string) string {
+	if s3Path == "" || strings.HasSuffix(s3Path, "/") {
+		return s3Path
+	}
+	return s3Path + ".s3"
+}
+
+// fromStoragePath converts a storage path back to S3 object path by removing .s3 extension
+func fromStoragePath(storagePath string) string {
+	return strings.TrimSuffix(storagePath, ".s3")
+}
+
+// isStorageFile checks if a path represents a file in storage (has .s3 extension)
+func isStorageFile(storagePath string) bool {
+	return strings.HasSuffix(storagePath, ".s3")
 }

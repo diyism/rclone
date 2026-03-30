@@ -117,13 +117,25 @@ func (b *s3Backend) HeadObject(ctx context.Context, bucketName, objectName strin
 		return nil, gofakes3.BucketNotFound(bucketName)
 	}
 
-	fp := path.Join(bucketName, objectName)
+	// Convert S3 path to storage path (add .s3 extension)
+	fp := path.Join(bucketName, toStoragePath(objectName))
 	node, err := _vfs.Stat(fp)
 	if err != nil {
 		return nil, gofakes3.KeyNotFound(objectName)
 	}
 
 	if !node.IsFile() {
+		return nil, gofakes3.KeyNotFound(objectName)
+	}
+
+	// CRITICAL FIX: Check if this path also exists as a directory
+	// In S3, "foo" can be both an object and a prefix (e.g., "foo" and "foo/bar" can coexist)
+	// But S3 clients may get confused if HEAD returns success for "foo" when "foo/xxx" also exists
+	// Solution: If both "foo.s3" (file) and "foo/" (directory) exist, pretend the object doesn't exist
+	// This makes the S3 client treat it as a prefix only, allowing access to "foo/xxx" paths
+	dirPath := path.Join(bucketName, objectName) + "/"
+	dirNode, dirErr := _vfs.Stat(dirPath)
+	if dirErr == nil && dirNode.IsDir() {
 		return nil, gofakes3.KeyNotFound(objectName)
 	}
 
@@ -166,7 +178,8 @@ func (b *s3Backend) GetObject(ctx context.Context, bucketName, objectName string
 		return nil, gofakes3.BucketNotFound(bucketName)
 	}
 
-	fp := path.Join(bucketName, objectName)
+	// Convert S3 path to storage path (add .s3 extension)
+	fp := path.Join(bucketName, toStoragePath(objectName))
 	node, err := _vfs.Stat(fp)
 	if err != nil {
 		return nil, gofakes3.KeyNotFound(objectName)
@@ -301,7 +314,9 @@ func (b *s3Backend) PutObject(
 		return result, gofakes3.BucketNotFound(bucketName)
 	}
 
-	fp := path.Join(bucketName, objectName)
+	// Convert S3 path to storage path (add .s3 extension)
+	storagePath := toStoragePath(objectName)
+	fp := path.Join(bucketName, storagePath)
 	objectDir := path.Dir(fp)
 	// _, err = db.fs.Stat(objectDir)
 	// if err == vfs.ENOENT {
@@ -394,7 +409,8 @@ func (b *s3Backend) deleteObject(ctx context.Context, bucketName, objectName str
 		return gofakes3.BucketNotFound(bucketName)
 	}
 
-	fp := path.Join(bucketName, objectName)
+	// Convert S3 path to storage path (add .s3 extension)
+	fp := path.Join(bucketName, toStoragePath(objectName))
 	// S3 does not report an error when attempting to delete a key that does not exist, so
 	// we need to skip IsNotExist errors.
 	if err := _vfs.Remove(fp); err != nil && !os.IsNotExist(err) {

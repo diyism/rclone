@@ -19,10 +19,21 @@ func (b *s3Backend) entryListR(_vfs *vfs.VFS, bucket, fdPath, name string, addPr
 	for _, entry := range dirEntries {
 		object := entry.Name()
 
-		// workaround for control-chars detect
-		objectPath := path.Join(fdPath, object)
+		// Skip files without .s3 extension (they are not S3 objects)
+		if !entry.IsDir() && !isStorageFile(object) {
+			continue
+		}
 
-		if !strings.HasPrefix(object, name) {
+		// Convert storage name to S3 name (remove .s3 extension for files)
+		s3Name := object
+		if !entry.IsDir() {
+			s3Name = fromStoragePath(object)
+		}
+
+		// workaround for control-chars detect
+		objectPath := path.Join(fdPath, s3Name)
+
+		if !strings.HasPrefix(s3Name, name) {
 			continue
 		}
 
