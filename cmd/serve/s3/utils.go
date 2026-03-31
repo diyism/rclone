@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -160,16 +161,56 @@ func authlistResolver(list []string) (map[string]string, error) {
 // toStoragePath converts an S3 object path to a storage path by adding .s3 extension
 // This solves the conflict where S3 allows both "foo/bar" (object) and "foo/bar/baz" (object with prefix)
 // but hierarchical filesystems like Google Drive don't allow a path to be both a file and directory
+// Also URL-encodes each path segment to handle special characters like colons (e.g., "127.0.0.1:13306")
+// that are not allowed in Google Drive file/directory names
 func toStoragePath(s3Path string) string {
-	if s3Path == "" || strings.HasSuffix(s3Path, "/") {
+	if s3Path == "" {
 		return s3Path
 	}
-	return s3Path + ".s3"
+
+	// Handle directory paths (ending with /)
+	isDir := strings.HasSuffix(s3Path, "/")
+	if isDir {
+		s3Path = strings.TrimSuffix(s3Path, "/")
+	}
+
+	// URL encode each path segment (but keep / as separator)
+	segments := strings.Split(s3Path, "/")
+	for i, seg := range segments {
+		if seg != "" {
+			segments[i] = url.PathEscape(seg)
+		}
+	}
+	encodedPath := strings.Join(segments, "/")
+
+	// Restore trailing slash for directories
+	if isDir {
+		return encodedPath + "/"
+	}
+
+	// Add .s3 extension for files
+	return encodedPath + ".s3"
 }
 
 // fromStoragePath converts a storage path back to S3 object path by removing .s3 extension
+// and URL-decoding each path segment
 func fromStoragePath(storagePath string) string {
-	return strings.TrimSuffix(storagePath, ".s3")
+	// Remove .s3 extension
+	s3Path := strings.TrimSuffix(storagePath, ".s3")
+
+	// URL decode each path segment
+	segments := strings.Split(s3Path, "/")
+	for i, seg := range segments {
+		if seg != "" {
+			decoded, err := url.PathUnescape(seg)
+			if err == nil {
+				segments[i] = decoded
+			}
+			// If decode fails, keep the original segment
+		}
+	}
+
+	return strings.Join(segments, "/")
 }
 
 // isStorageFile checks if a path represents a file in storage (has .s3 extension)
